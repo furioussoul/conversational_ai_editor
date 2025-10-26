@@ -1,0 +1,529 @@
+[
+  {
+    "id": "3aa60941-9ab7-4247-a08b-247b0da0f298",
+    "name": "Virtual Clinic Assistant",
+    "description": "帮助患者预约、查询化验结果以及解答常见问题的智能助手。",
+    "createdAt": "2025-10-25T13:26:04.165Z",
+    "updatedAt": "2025-10-25T13:26:04.165Z",
+    "systemPromptJson": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "heading",
+          "attrs": {
+            "level": 2
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "Agent 概述"
+            }
+          ]
+        },
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "欢迎使用 Virtual Clinic Assistant，我可以帮助患者预约门诊、查询化验结果，并回答常见问题。"
+            }
+          ]
+        }
+      ]
+    },
+    "tools": [
+      {
+        "id": "fd01fe6e-a983-4859-b466-ba13c740b8fa",
+        "agentId": "3aa60941-9ab7-4247-a08b-247b0da0f298",
+        "name": "get_upcoming_slots",
+        "description": "获取未来 7 天内可预约的时间段。"
+      },
+      {
+        "id": "dd889874-1e29-4f15-8131-8d52cc911d16",
+        "agentId": "3aa60941-9ab7-4247-a08b-247b0da0f298",
+        "name": "schedule_appointment",
+        "description": "根据患者选择的时间安排预约。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patientId": {
+              "type": "string"
+            },
+            "slotId": {
+              "type": "string"
+            }
+          },
+          "required": ["patientId", "slotId"]
+        }
+      }
+    ],
+    "glossary": [
+      {
+        "id": "420bf0c0-9312-4aff-91a2-8e9a2621c153",
+        "agentId": "3aa60941-9ab7-4247-a08b-247b0da0f298",
+        "name": "Office Hours",
+        "description": "诊所的办公时间，通常为周一至周五 9:00-18:00。",
+        "synonyms": ["办公时间", "营业时间"]
+      }
+    ],
+    "guidelines": [
+      {
+        "id": "c5ffa7cc-0492-482a-83a5-12ceb680df19",
+        "agentId": "3aa60941-9ab7-4247-a08b-247b0da0f298",
+        "condition": "The patient asks to talk to a human agent",
+        "action": "告知患者可以拨打诊所电话 400-123-456 获取人工服务，并在需要时提供邮件支持。",
+        "toolIds": []
+      }
+    ],
+    "journeys": [
+      {
+        "id": "5b7ee133-64f5-497b-99e6-e311dc692431",
+        "agentId": "3aa60941-9ab7-4247-a08b-247b0da0f298",
+        "title": "预约门诊",
+        "description": "帮助患者完成门诊预约流程。",
+        "triggerConditions": ["schedule appointment", "book visit"],
+        "logic": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "heading",
+              "attrs": { "level": 2 },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "预约门诊流程"
+                }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "当患者表达预约需求时，Agent 首先确认基本信息并提供可用时间。"
+                }
+              ]
+            },
+            {
+              "type": "bulletList",
+              "content": [
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "欢迎患者并询问希望预约的时间段。"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "调用工具 get_upcoming_slots 展示可选的门诊时间。"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "确认患者选择后，使用 schedule_appointment 完成预约并总结结果。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": "2dc2eabd-a16b-4949-9fa8-173aa44d7c2e",
+            "type": "start",
+            "position": {
+              "x": 50,
+              "y": 50
+            },
+            "data": {
+              "label": "开始"
+            }
+          },
+          {
+            "id": "11f47ed8-29ad-4955-97f3-12fe2e2f1668",
+            "type": "chat",
+            "position": {
+              "x": 300,
+              "y": 50
+            },
+            "data": {
+              "label": "Agent Says",
+              "content": "列出可预约时间，并询问患者希望的时间段。"
+            }
+          },
+          {
+            "id": "feb2396c-f4b8-435b-b5c7-3dc79ee9ab17",
+            "type": "end",
+            "position": {
+              "x": 550,
+              "y": 50
+            },
+            "data": {
+              "label": "结束"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "94347bc5-1b46-4f85-ad0e-6cf457f16f01",
+            "source": "2dc2eabd-a16b-4949-9fa8-173aa44d7c2e",
+            "target": "11f47ed8-29ad-4955-97f3-12fe2e2f1668",
+            "label": "患者需要预约"
+          },
+          {
+            "id": "d2c50f7d-ed3b-4f5d-9aec-ab064ad5bdb8",
+            "source": "11f47ed8-29ad-4955-97f3-12fe2e2f1668",
+            "target": "feb2396c-f4b8-435b-b5c7-3dc79ee9ab17",
+            "label": "预约完成"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "e3f89fc3-befd-47e6-861e-02007b699558",
+    "name": "未命名 Agent 2",
+    "systemPromptJson": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "在这里编写系统提示，使用工具和术语帮助 Agent 更好完成任务。"
+            }
+          ]
+        }
+      ]
+    },
+    "createdAt": "2025-10-25T13:26:09.391Z",
+    "updatedAt": "2025-10-25T13:26:09.391Z",
+    "tools": [],
+    "glossary": [],
+    "guidelines": [],
+    "journeys": []
+  },
+  {
+    "id": "779e382d-63fa-4ca3-bab3-91a421942148",
+    "name": "未命名 Agent 3",
+    "systemPromptJson": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "在这里编写系统提示，使用工具和术语帮助 Agent 更好完成任务。1"
+            }
+          ]
+        }
+      ]
+    },
+    "createdAt": "2025-10-25T13:26:11.076Z",
+    "updatedAt": "2025-10-25T13:41:27.581Z",
+    "tools": [],
+    "glossary": [],
+    "guidelines": [],
+    "journeys": [
+      {
+        "id": "bf7c3461-c5e5-4de6-b1d5-ca27ac99e326",
+        "agentId": "779e382d-63fa-4ca3-bab3-91a421942148",
+        "title": "新的 流程",
+        "description": "",
+        "triggerConditions": [],
+        "logic": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "heading",
+              "attrs": { "level": 2 },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "默认对话流程"
+                }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "这是一个示例流程，用于帮助调试富文本逻辑编辑器。"
+                }
+              ]
+            },
+            {
+              "type": "orderedList",
+              "attrs": { "start": 1 },
+              "content": [
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Agent 向用户问好并确认当前需求。"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "如果需要外部信息，调用相关工具并解释输出。"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "总结本轮对话并告知下一步行动。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": "097862fe-072f-440d-8570-48ce43cc7f99",
+            "type": "start",
+            "position": {
+              "x": 80,
+              "y": 120
+            },
+            "data": {
+              "label": "开始"
+            }
+          },
+          {
+            "id": "588c8c1b-2162-428e-9667-0aad12a43b53",
+            "type": "chat",
+            "position": {
+              "x": 280,
+              "y": 120
+            },
+            "data": {
+              "label": "Agent Says",
+              "content": "在此编写初始回复…"
+            }
+          },
+          {
+            "id": "514c09a6-5d25-414d-a601-7fd4b8fa6b90",
+            "type": "end",
+            "position": {
+              "x": 520,
+              "y": 120
+            },
+            "data": {
+              "label": "结束"
+            }
+          },
+          {
+            "id": "b0505ef1-3a7d-417b-8777-4d8b0e4a829e",
+            "type": "chat",
+            "position": {
+              "x": 100,
+              "y": 100
+            },
+            "data": {
+              "label": "Agent Says",
+              "content": "新的回复内容…"
+            }
+          },
+          {
+            "id": "efe1d6ab-230d-48cf-bc49-9d169111f6e7",
+            "type": "tool",
+            "position": {
+              "x": 100,
+              "y": 100
+            },
+            "data": {
+              "label": "调用工具"
+            }
+          },
+          {
+            "id": "c3097bcd-3ca4-47fe-804a-faa863727fa8",
+            "type": "tool",
+            "position": {
+              "x": 100,
+              "y": 100
+            },
+            "data": {
+              "label": "调用工具"
+            }
+          },
+          {
+            "id": "afe165a1-0985-4389-94fa-5dcfd6543e1b",
+            "type": "end",
+            "position": {
+              "x": 100,
+              "y": 100
+            },
+            "data": {
+              "label": "结束"
+            }
+          },
+          {
+            "id": "41a550aa-b92e-4965-9c24-5b9040d978dc",
+            "type": "chat",
+            "position": {
+              "x": 100,
+              "y": 100
+            },
+            "data": {
+              "label": "Agent Says",
+              "content": "新的回复内容…"
+            }
+          },
+          {
+            "id": "c14643ee-5853-4242-b920-0da736a092c7",
+            "type": "chat",
+            "position": {
+              "x": 100,
+              "y": 100
+            },
+            "data": {
+              "label": "Agent Says",
+              "content": "新的回复内容…"
+            }
+          },
+          {
+            "id": "6233759a-6ba2-47e7-9226-7c4b6a17e70b",
+            "type": "chat",
+            "position": {
+              "x": 100,
+              "y": 100
+            },
+            "data": {
+              "label": "Agent Says",
+              "content": "新的回复内容…"
+            }
+          },
+          {
+            "id": "dd826584-2e4a-4cde-a973-b793f4188861",
+            "type": "chat",
+            "position": {
+              "x": 100,
+              "y": 100
+            },
+            "data": {
+              "label": "Agent Says",
+              "content": "新的回复内容…"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "555664d2-e3a0-455f-ab01-4180da0952a5",
+            "source": "097862fe-072f-440d-8570-48ce43cc7f99",
+            "target": "588c8c1b-2162-428e-9667-0aad12a43b53",
+            "label": "进入流程"
+          },
+          {
+            "id": "9a50f630-42fc-4209-b3cf-fccd33b9d2ab",
+            "source": "588c8c1b-2162-428e-9667-0aad12a43b53",
+            "target": "514c09a6-5d25-414d-a601-7fd4b8fa6b90",
+            "label": "流程结束"
+          }
+        ]
+      }
+    ],
+    "description": "12313"
+  },
+  {
+    "id": "71266af6-a7a9-407e-9444-6ff23f73d83b",
+    "name": "未命名 Agent 4",
+    "systemPromptJson": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "在这里编写系统提示，使用工具和术语帮助 Agent 更好完成任务。"
+            }
+          ]
+        }
+      ]
+    },
+    "createdAt": "2025-10-25T13:41:33.451Z",
+    "updatedAt": "2025-10-25T13:41:33.451Z",
+    "tools": [],
+    "glossary": [],
+    "guidelines": [],
+    "journeys": []
+  },
+  {
+    "id": "da3827e9-6601-4e96-9a17-f1170bb200c3",
+    "name": "未命名 Agent 5",
+    "systemPromptJson": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "在这里编写系统提示，使用工具和术语帮助 Agent 更好完成任务。"
+            }
+          ]
+        }
+      ]
+    },
+    "createdAt": "2025-10-25T13:52:16.043Z",
+    "updatedAt": "2025-10-25T13:52:16.043Z",
+    "tools": [],
+    "glossary": [],
+    "guidelines": [],
+    "journeys": []
+  }
+]
