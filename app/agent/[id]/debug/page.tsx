@@ -1,12 +1,11 @@
 'use client';
 
-import { ArrowLeft, Loader2, Search, Send } from 'lucide-react';
+import { ArrowLeft, Loader2, Send } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import useSWR from 'swr';
 
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
 import type { Agent, Journey } from '@/lib/data/types';
@@ -29,12 +28,25 @@ const createId = () => {
   return Math.random().toString(36).slice(2);
 };
 
+type ConversationMessage = {
+  role: 'user' | 'assistant';
+  content: string;
+};
+
 type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
-  status: 'pending' | 'done' | 'error';
+  status: 'queued' | 'streaming' | 'done' | 'error';
   error?: string;
+  meta?: {
+    queueAhead?: number;
+  };
+};
+
+type SSEEvent = {
+  event: string;
+  data: string;
 };
 
 type SerializedJourney = Journey & {
@@ -51,16 +63,36 @@ export default function AgentDebugPage({ params }: { params: { id: string } }) {
     },
   );
 
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessagesState] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
-  const [journeyQuery, setJourneyQuery] = useState('');
-  const [isSending, setIsSending] = useState(false);
+  const [activeStreams, setActiveStreams] = useState(0);
+  const [queuedUserInput, setQueuedUserInput] = useState('');
+  const [queuedMessageId, setQueuedMessageId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const isFlushingQueuedRef = useRef(false);
+  const flushQueuedRef = useRef<() => void>(() => {});
+  const messagesRef = useRef<ChatMessage[]>([]);
 
   useEffect(() => {
     if (!scrollRef.current) return;
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages]);
+
+  const updateMessages = useCallback(
+    (updater: (prev: ChatMessage[]) => ChatMessage[]) => {
+      setMessagesState((prev) => {
+        const next = updater(prev);
+        messagesRef.current = next;
+        return next;
+      });
+    },
+    [],
+  );
+
+  const commitMessages = useCallback((next: ChatMessage[]) => {
+    messagesRef.current = next;
+    setMessagesState(next);
+  }, []);
 
   const agent = data ?? null;
 
@@ -72,106 +104,354 @@ export default function AgentDebugPage({ params }: { params: { id: string } }) {
     }));
   }, [agent]);
 
-  const filteredJourneys = useMemo(() => {
-    if (!journeyQuery.trim()) return journeysWithPlainText;
-    const keyword = journeyQuery.trim().toLowerCase();
-    return journeysWithPlainText.filter((journey) => {
-      return [
-        journey.title,
-        journey.description ?? '',
-        journey.logicText,
-        journey.triggerConditions.join(','),
-      ]
-        .join('\n')
-        .toLowerCase()
-        .includes(keyword);
-    });
-  }, [journeyQuery, journeysWithPlainText]);
-
   const debugContext = useMemo(() => {
     if (!agent) return '';
     return buildAgentContext(agent, journeysWithPlainText);
   }, [agent, journeysWithPlainText]);
 
-  const handleSend = async () => {
-    const prompt = input.trim();
-    if (!agent || !prompt || isSending) {
+  const hasActiveStream = activeStreams > 0;
+
+  const startAssistantCall = useCallback(
+    async (rawPrompt: string, options?: { reuseMessageId?: string }) => {
+      if (!agent) {
+        return;
+      }
+
+      const prompt = rawPrompt.trim();
+      if (!prompt) {
+        return;
+      }
+
+      const reuseId = options?.reuseMessageId ?? null;
+      const assistantPlaceholder: ChatMessage = {
+        id: createId(),
+        role: 'assistant',
+        content: '',
+        status: 'queued',
+      };
+
+      const baseMessages = messagesRef.current;
+      let reusedMessageFound = false;
+
+      const updatedMessages = baseMessages.map<ChatMessage>((message) => {
+        if (reuseId && message.id === reuseId) {
+          reusedMessageFound = true;
+          const updated: ChatMessage = {
+            ...message,
+            role: 'user',
+            content: prompt,
+            status: 'done',
+            error: undefined,
+            meta: undefined,
+          };
+          return updated;
+        }
+        return message;
+      });
+
+      if (!reuseId) {
+        const newMessage: ChatMessage = {
+          id: createId(),
+          role: 'user',
+          content: prompt,
+          status: 'done',
+        };
+        updatedMessages.push(newMessage);
+      } else if (!reusedMessageFound) {
+        const newMessage: ChatMessage = {
+          id: reuseId,
+          role: 'user',
+          content: prompt,
+          status: 'done',
+        };
+        updatedMessages.push(newMessage);
+      }
+
+      const conversationHistory: ConversationMessage[] = updatedMessages
+        .filter((message) => message.status === 'done')
+        .map((message) => ({
+          role: message.role,
+          content: message.content,
+        }));
+
+      const nextMessages: ChatMessage[] = [
+        ...updatedMessages,
+        assistantPlaceholder,
+      ];
+      commitMessages(nextMessages);
+
+      if (reuseId) {
+        setQueuedUserInput('');
+        setQueuedMessageId(null);
+      }
+
+      setActiveStreams((prev) => prev + 1);
+
+      let finished = false;
+      let fullText = '';
+      let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+
+      const finalize = (
+        status: 'done' | 'error',
+        content: string,
+        errorMessage?: string,
+      ) => {
+        if (finished) return;
+        finished = true;
+        updateMessages((prev) =>
+          prev.map((message) =>
+            message.id === assistantPlaceholder.id
+              ? {
+                  ...message,
+                  status,
+                  content: status === 'error' ? '' : content,
+                  error:
+                    status === 'error'
+                      ? (errorMessage ?? '未知错误')
+                      : undefined,
+                  meta: undefined,
+                }
+              : message,
+          ),
+        );
+        setActiveStreams((prev) => {
+          const next = Math.max(0, prev - 1);
+          if (next === 0) {
+            Promise.resolve().then(() => {
+              flushQueuedRef.current();
+            });
+          }
+          return next;
+        });
+      };
+
+      try {
+        const response = await fetch(`/api/agents/${agent.id}/debug`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'text/event-stream',
+          },
+          body: JSON.stringify({
+            context: debugContext,
+            messages: conversationHistory,
+          }),
+        });
+
+        if (!response.ok || !response.body) {
+          const detail = await response.text().catch(() => '');
+          const message = detail
+            ? `LLM 调用失败：${detail}`
+            : `LLM 调用失败（HTTP ${response.status}）`;
+          throw new Error(message);
+        }
+
+        reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let doneReceived = false;
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parsed = extractSSEEvents(buffer);
+          buffer = parsed.buffer;
+
+          for (const { event, data } of parsed.events) {
+            if (!data) continue;
+
+            if (event === 'queued') {
+              const payload = safeJsonParse<{ ahead?: number }>(data);
+              updateMessages((prev) =>
+                prev.map((message) =>
+                  message.id === assistantPlaceholder.id
+                    ? {
+                        ...message,
+                        status: 'queued',
+                        meta: {
+                          ...message.meta,
+                          queueAhead:
+                            typeof payload?.ahead === 'number'
+                              ? payload.ahead
+                              : undefined,
+                        },
+                      }
+                    : message,
+                ),
+              );
+              continue;
+            }
+
+            if (event === 'status') {
+              const payload = safeJsonParse<{ state?: string }>(data);
+              if (payload?.state === 'processing') {
+                updateMessages((prev) =>
+                  prev.map((message) =>
+                    message.id === assistantPlaceholder.id
+                      ? {
+                          ...message,
+                          status: 'streaming',
+                          meta: undefined,
+                        }
+                      : message,
+                  ),
+                );
+              }
+              continue;
+            }
+
+            if (event === 'chunk') {
+              const payload = safeJsonParse<{ content?: string }>(data);
+              const chunk = payload?.content ?? '';
+              if (!chunk) continue;
+              fullText += chunk;
+              updateMessages((prev) =>
+                prev.map((message) =>
+                  message.id === assistantPlaceholder.id
+                    ? {
+                        ...message,
+                        status: 'streaming',
+                        meta: undefined,
+                        content: fullText,
+                      }
+                    : message,
+                ),
+              );
+              continue;
+            }
+
+            if (event === 'done') {
+              const payload = safeJsonParse<{ content?: string }>(data);
+              const finalContent = payload?.content ?? fullText;
+              fullText = finalContent;
+              doneReceived = true;
+              finalize('done', finalContent);
+              break;
+            }
+
+            if (event === 'error') {
+              const payload = safeJsonParse<{ message?: string }>(data);
+              const errorMessage = payload?.message ?? 'LLM 调用失败';
+              throw new Error(errorMessage);
+            }
+          }
+
+          if (doneReceived) {
+            break;
+          }
+        }
+
+        if (!finished) {
+          finalize('done', fullText);
+        }
+      } catch (err) {
+        if (reader) {
+          try {
+            await reader.cancel();
+          } catch (cancelErr) {
+            console.error(cancelErr);
+          }
+        }
+        const message = err instanceof Error ? err.message : '未知错误';
+        finalize('error', '', message);
+      }
+    },
+    [agent, commitMessages, debugContext, updateMessages],
+  );
+
+  const flushPendingQueuedMessages = useCallback(() => {
+    if (!queuedMessageId) {
+      return;
+    }
+    const pendingText = queuedUserInput.trim();
+    if (!pendingText) {
+      return;
+    }
+    if (isFlushingQueuedRef.current) {
+      return;
+    }
+    isFlushingQueuedRef.current = true;
+    startAssistantCall(pendingText, {
+      reuseMessageId: queuedMessageId,
+    }).finally(() => {
+      isFlushingQueuedRef.current = false;
+    });
+  }, [queuedMessageId, queuedUserInput, startAssistantCall]);
+
+  useEffect(() => {
+    flushQueuedRef.current = flushPendingQueuedMessages;
+  }, [flushPendingQueuedMessages]);
+
+  const handleSend = useCallback(() => {
+    if (!agent) {
       return;
     }
 
-    const userMessage: ChatMessage = {
-      id: createId(),
-      role: 'user',
-      content: prompt,
-      status: 'done',
-    };
-    const assistantPlaceholder: ChatMessage = {
-      id: createId(),
-      role: 'assistant',
-      content: '',
-      status: 'pending',
-    };
+    const trimmed = input.trim();
+    if (!trimmed) {
+      return;
+    }
 
-    const conversationHistory = [...messages, userMessage]
-      .filter((message) => message.status !== 'error')
-      .map((message) => ({ role: message.role, content: message.content }));
+    if (hasActiveStream) {
+      const combinedContent = queuedUserInput
+        ? `${queuedUserInput}\n${trimmed}`
+        : trimmed;
 
-    setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
-    setInput('');
-    setIsSending(true);
+      setQueuedUserInput(combinedContent);
+      setInput('');
 
-    try {
-      const response = await fetch(`/api/agents/${agent.id}/debug`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          context: debugContext,
-          messages: conversationHistory,
-        }),
-      });
-
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        throw new Error(
-          payload?.message || `LLM 调用失败（HTTP ${response.status}）`,
+      if (queuedMessageId) {
+        updateMessages((prev) =>
+          prev.map((message) =>
+            message.id === queuedMessageId
+              ? { ...message, content: combinedContent }
+              : message,
+          ),
         );
+        return;
       }
 
-      const payload = (await response.json()) as {
-        message: string;
+      const messageId = createId();
+      setQueuedMessageId(messageId);
+      const queuedMessage: ChatMessage = {
+        id: messageId,
+        role: 'user',
+        content: combinedContent,
+        status: 'queued',
       };
+      updateMessages((prev) => [...prev, queuedMessage]);
+      return;
+    }
 
-      setMessages((prev) =>
+    setInput('');
+    if (queuedMessageId) {
+      const combinedContent = queuedUserInput
+        ? `${queuedUserInput}\n${trimmed}`
+        : trimmed;
+      setQueuedUserInput(combinedContent);
+      updateMessages((prev) =>
         prev.map((message) =>
-          message.id === assistantPlaceholder.id
-            ? {
-                ...message,
-                content: payload.message,
-                status: 'done',
-              }
+          message.id === queuedMessageId
+            ? { ...message, content: combinedContent }
             : message,
         ),
       );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : '未知错误';
-      setMessages((prev) =>
-        prev.map((item) =>
-          item.id === assistantPlaceholder.id
-            ? {
-                ...item,
-                status: 'error',
-                error: message,
-                content: message,
-              }
-            : item,
-        ),
-      );
-    } finally {
-      setIsSending(false);
+      void startAssistantCall(combinedContent, {
+        reuseMessageId: queuedMessageId,
+      });
+      return;
     }
-  };
+    void startAssistantCall(trimmed);
+  }, [
+    agent,
+    hasActiveStream,
+    input,
+    queuedMessageId,
+    queuedUserInput,
+    startAssistantCall,
+    updateMessages,
+  ]);
 
   if (isLoading) {
     return (
@@ -243,7 +523,7 @@ export default function AgentDebugPage({ params }: { params: { id: string } }) {
           </div>
           <div
             ref={scrollRef}
-            className="flex-1 space-y-4 overflow-y-auto rounded-md border border-muted bg-background p-4"
+            className="flex-1 space-y-4 overflow-y-auto rounded-md border border-muted bg-background p-4 pb-36"
           >
             {messages.length === 0 && (
               <div className="text-sm text-muted-foreground">
@@ -262,13 +542,20 @@ export default function AgentDebugPage({ params }: { params: { id: string } }) {
                 <pre className="whitespace-pre-wrap break-words text-sm">
                   {message.content}
                 </pre>
-                {message.status === 'pending' && (
-                  <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    等待模型响应…
-                  </div>
-                )}
-                {message.status === 'error' && (
+                {message.role === 'assistant' &&
+                  (message.status === 'queued' ||
+                    message.status === 'streaming') && (
+                    <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      {message.status === 'queued'
+                        ? message.meta?.queueAhead &&
+                          message.meta.queueAhead > 0
+                          ? `排队中，前方还有 ${message.meta.queueAhead} 个请求…`
+                          : '排队中…'
+                        : '等待模型响应…'}
+                    </div>
+                  )}
+                {message.status === 'error' && message.error && (
                   <div className="mt-2 text-xs text-destructive">
                     调用失败：{message.error}
                   </div>
@@ -276,41 +563,47 @@ export default function AgentDebugPage({ params }: { params: { id: string } }) {
               </div>
             ))}
           </div>
-          <div className="space-y-3">
-            <Textarea
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              placeholder="输入你的调试问题，Shift+Enter 换行…"
-              rows={3}
-              className="resize-none"
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  handleSend();
-                }
-              }}
-            />
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>
-                请求通过后端代理发送至
-                DeepSeek（模型：deepseek-v3）。请在服务器环境变量中配置
-                <code className="mx-1 rounded bg-muted px-1">
-                  ONEAI_API_KEY
-                </code>
-                。
-              </span>
-              <Button
-                onClick={handleSend}
-                disabled={isSending || !input.trim()}
-                className="gap-2"
-              >
-                {isSending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Send className="h-4 w-4" />
-                )}
-                发送
-              </Button>
+          <div className="sticky bottom-0 z-10 -mx-4 -mb-4 border-t border-border bg-card/95 p-4 backdrop-blur">
+            <div className="space-y-3">
+              <Textarea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                placeholder="输入你的调试问题，Shift+Enter 换行…"
+                rows={3}
+                className="resize-none"
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    handleSend();
+                  }
+                }}
+              />
+              <div className="flex flex-col gap-3 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+                <span>
+                  请求通过后端代理发送至
+                  LLM（默认模型：gpt-4o）。请在服务器环境变量中配置
+                  <code className="mx-1 rounded bg-muted px-1">
+                    OPENAI_API_KEY
+                  </code>
+                  与
+                  <code className="mx-1 rounded bg-muted px-1">
+                    OPENAI_BASE_URL
+                  </code>
+                  。
+                </span>
+                <Button
+                  onClick={handleSend}
+                  disabled={!input.trim()}
+                  className="gap-2 self-start sm:self-auto"
+                >
+                  {hasActiveStream ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
+                  发送
+                </Button>
+              </div>
             </div>
           </div>
         </section>
@@ -444,4 +737,55 @@ function extractPlainText(node: unknown): string {
     }
   }
   return '';
+}
+
+function extractSSEEvents(buffer: string): {
+  events: SSEEvent[];
+  buffer: string;
+} {
+  const events: SSEEvent[] = [];
+  let working = buffer.replace(/\r/g, '');
+
+  while (true) {
+    const separatorIndex = working.indexOf('\n\n');
+    if (separatorIndex === -1) {
+      break;
+    }
+
+    const rawEvent = working.slice(0, separatorIndex);
+    working = working.slice(separatorIndex + 2);
+
+    if (!rawEvent.trim()) {
+      continue;
+    }
+
+    const lines = rawEvent.split('\n');
+    let event = 'message';
+    const dataLines: string[] = [];
+
+    for (const line of lines) {
+      if (line.startsWith(':')) {
+        continue;
+      }
+      if (line.startsWith('event:')) {
+        event = line.slice(6).trim();
+        continue;
+      }
+      if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).trim());
+      }
+    }
+
+    events.push({ event, data: dataLines.join('\n') });
+  }
+
+  return { events, buffer: working };
+}
+
+function safeJsonParse<T>(input: string): T | null {
+  try {
+    return JSON.parse(input) as T;
+  } catch {
+    return null;
+  }
 }
