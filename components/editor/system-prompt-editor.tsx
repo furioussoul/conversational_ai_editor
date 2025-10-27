@@ -281,7 +281,7 @@ export function SystemPromptEditor({
             ref={gridRef}
             rowData={rows}
             columnDefs={columnDefs}
-            defaultColDef={defaultColDef}
+            // defaultColDef={defaultColDef}
             context={gridContext}
             domLayout="autoHeight"
             onCellValueChanged={handleCellValueChanged}
