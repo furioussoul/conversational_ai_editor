@@ -34,6 +34,20 @@
         "uriFormat": "%s",
         "action": "debugWithChrome"
       }
+    },
+    {
+      "name": "Python: FastAPI",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["main:app", "--reload"],
+      "jinja": false,
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "/Users/szj/miniconda3/bin/python",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      }
     }
   ],
   "compounds": [

@@ -16,6 +16,7 @@ package-lock.json
 node_modules
 /.pnp
 .pnp.js
+api/livechat-robotapi-master
 
 # Testing
 /coverage
@@ -57,3 +58,7 @@ next-env.d.ts
 *.swp
 *.swo
 *~
+
+# Python
+__pycache__/
+*.pyc
